@@ -1,0 +1,165 @@
+COMMENT Build a tally table of dates and then use this to determine Timezone corrections with Daylight Savings Time
+COMMENT Could use the timezoneDb to determine the Start & end dates
+
+SET FOLDER /Tmp
+CLOSE PRIMARY
+DIR *.AC TO _Dir
+OPEN _Dir
+
+v_num = 1
+v_years = "7"
+v_datestart = CTOD(ALLTRIM(DATE(GOMONTH(TODAY(),-%v_years%*12),'YYYY'))+'0101','YYYYMMDD')-1
+v_dateend   = CTOD(ALLTRIM(DATE(GOMONTH(TODAY(),%v_years%*12),'YYYY')) +'1231','YYYYMMDD')
+v_num_max = v_dateend - v_datestart
+SET LOOP TO 0
+GROUP WHILE RECNO() = 1
+LOOP while v_num <= %v_num_max%
+   EXTRACT v_num AS "Tally" CTOD(DATE(v_datestart+v_num,'YYYYMMDD'),'YYYYMMDD') AS "Tally_Date" TO Tmp_Tally_Dates 
+   v_num = v_num + 1
+END
+END
+SET LOOP TO 200
+
+SET FOLDER /%fld_Data%/timezonedb
+COMMENT *** Get timezone data from the TimeZoneDB sourced from TimeZoneDb.com unzip into Data\timezonedb
+COMMENT *** This is for a UNICODE version of ACL import.
+IMPORT DELIMITED TO TZ_Country "%fld_Data%\timezonedb\TZ_Country.fil" FROM "%fld_Data%\timezonedb\country.csv" 0 SEPARATOR "," QUALIFIER '"' CONSECUTIVE STARTLINE 1 CRCLEAR LFCLEAR FIELD "country_code" C AT 1 DEC 0 WID 4 PIC "" AS "" FIELD "country_name" C AT 5 DEC 0 WID 90 PIC "" AS "" 
+OPEN TZ_Country
+INDEX ON country_code TO inx_TZ_Country
+
+IMPORT DELIMITED TO TZ_Zone "%fld_Data%\timezonedb\TZ_Zone.fil" FROM "%fld_Data%\timezonedb\zone.csv" 0 SEPARATOR "," QUALIFIER '"' CONSECUTIVE STARTLINE 1 CRCLEAR LFCLEAR FIELD "zone_id" C AT 1 DEC 0 WID 20 PIC "" AS "" FIELD "country_code" C AT 21 DEC 0 WID 4 PIC "" AS "" FIELD "zone_name" C AT 25 DEC 0 WID 70 PIC "" AS "" 
+OPEN TZ_Zone
+INDEX ON zone_id TO inx_TZ_Zone
+
+IMPORT DELIMITED TO TZ_timezone "%fld_Data%\timezonedb\TZ_timezone.fil" FROM "%fld_Data%\timezonedb\timezone.csv" 0 SEPARATOR "," QUALIFIER '"' CONSECUTIVE STARTLINE 1 FIELD "zone_id" C AT 1 DEC 0 WID 20 PIC "" AS "" FIELD "abbreviation" C AT 21 DEC 0 WID 12 PIC "" AS "" FIELD "time_start" N AT 33 DEC 0 WID 22 PIC "" AS "" FIELD "gmt_offset" N AT 55 DEC 0 WID 12 PIC "" AS "" FIELD "dst" L AT 67 DEC 0 WID 2 PIC "" AS "" 
+
+OPEN TZ_timezone
+DEFINE FIELD Local_Time     COMPUTED  STODT((time_start/86400.00000000)+25569-1+(gmt_offset / 86400.00000000))
+DEFINE FIELD Local_Offset   COMPUTED
+AS "Local Offset GMT"
+"+"+ALLTRIM(TIME(STOT((ABS(gmt_offset) / 86400.00000000)),"hh:mm")) IF gmt_offset > 0
+"-"+ALLTRIM(TIME(STOT((ABS(gmt_offset) / 86400.00000000)),"hh:mm")) IF gmt_offset < 0
+"+00:00"
+
+DEFINE RELATION zone_id WITH TZ_Zone INDEX inx_TZ_Zone
+DEFINE RELATION TZ_Zone.country_code WITH TZ_Country INDEX inx_TZ_Country
+
+v_timefields = 'TZ_Country.country_code TZ_Country.country_name TZ_Zone.zone_id TZ_Zone.zone_name abbreviation Local_Time Local_Offset CTOD(DATE(Local_Time,"YYYYMMDD"),"YYYYMMDD") AS "Tally_Date" '
+
+COMMENT *** NZST is NZ/Auckland = zone 278
+COMMENT *** AEST is AU/Sydney   = zone 38
+
+OPEN TZ_Timezone
+GROUP IF BETWEEN(Local_time, v_datestart, v_dateend)
+GROUP IF Value(zone_id,0) = 278
+   EXTRACT FIELDS %v_timefields% TO "%fld_Data%\timezonedb\NZST_DST_Start.fil" IF DST = T
+   EXTRACT FIELDS %v_timefields% TO "%fld_Data%\timezonedb\NZST_DST_End.fil"   IF DST = F
+END
+GROUP IF Value(zone_id,0) = 38
+   EXTRACT FIELDS %v_timefields% TO "%fld_Data%\timezonedb\AEST_DST_Start.fil" IF DST = T
+   EXTRACT FIELDS %v_timefields% TO "%fld_Data%\timezonedb\AEST_DST_End.fil"   IF DST = F
+END
+END
+
+OPEN NZST_DST_Start
+INDEX ON Tally_Date TO inx_DST_Start_NZST
+OPEN NZST_DST_End
+INDEX ON Tally_Date TO inx_DST_End_NZST
+
+OPEN AEST_DST_Start
+INDEX ON Tally_Date TO inx_DST_Start_AEST
+OPEN AEST_DST_End
+INDEX ON Tally_Date TO inx_DST_End_AEST
+
+
+OPEN Tmp_Tally_Dates 
+DEFINE RELATION Tally_Date WITH NZST_DST_Start INDEX inx_DST_Start_NZST AS NZST_DST_Start
+DEFINE RELATION Tally_Date WITH NZST_DST_End   INDEX inx_DST_End_NZST   AS NZST_DST_End
+DEFINE RELATION Tally_Date WITH AEST_DST_Start INDEX inx_DST_Start_AEST AS AEST_DST_Start
+DEFINE RELATION Tally_Date WITH AEST_DST_End   INDEX inx_DST_End_AEST   AS AEST_DST_End
+
+OPEN NZST_DST_Start
+First_NZST_Start = Tally_Date
+NZST_DST_Zone = ALLTRIM(Local_Offset)
+NZST_TimeChange = CTODT(" ")
+OPEN NZST_DST_End
+First_NZST_End = Tally_Date
+NZST_TimeZone = ALLTRIM(Local_Offset)
+
+
+OPEN AEST_DST_Start
+First_AEST_Start = Tally_Date
+AEST_DST_Zone = ALLTRIM(Local_Offset)
+AEST_TimeChange = CTODT(" ")
+OPEN AEST_DST_End
+First_AEST_End = Tally_Date
+AEST_TimeZone = ALLTRIM(Local_Offset)
+
+OPEN Tmp_Tally_Dates 
+NZST_DST_active = First_NZST_End < First_NZST_Start
+v_NZST_Local_offset = NZST_TimeZone 
+v_NZST_Local_offset = NZST_DST_Zone IF NZST_DST_active
+ 
+AEST_DST_active = First_AEST_End < First_AEST_Start
+v_AEST_Local_offset = AEST_TimeZone 
+v_AEST_Local_offset = AEST_DST_Zone IF AEST_DST_active
+
+LET v_Sun = 0 v_Mon = 0 v_Tue = 0 v_Wed = 0 v_Thu = 0 v_Fri = 0 v_Sat = 0 v_CDOW = BLANKS(3) v_NDOW = 0
+GROUP
+   v_Sun = 0 IF DAY(Tally_Date) = 1 
+   v_Mon = 0 IF DAY(Tally_Date) = 1
+   v_Tue = 0 IF DAY(Tally_Date) = 1 
+   v_Wed = 0 IF DAY(Tally_Date) = 1
+   v_Thu = 0 IF DAY(Tally_Date) = 1
+   v_Fri = 0 IF DAY(Tally_Date) = 1
+   v_Sat = 0 IF DAY(Tally_Date) = 1
+
+   v_Sun = v_Sun + 1 IF CDOW(Tally_Date,3) = "Sun"
+   v_Mon = v_Mon + 1 IF CDOW(Tally_Date,3) = "Mon"
+   v_Tue = v_Tue + 1 IF CDOW(Tally_Date,3) = "Tue"
+   v_Wed = v_Wed + 1 IF CDOW(Tally_Date,3) = "Wed"
+   v_Thu = v_Thu + 1 IF CDOW(Tally_Date,3) = "Thu"
+   v_Fri = v_Fri + 1 IF CDOW(Tally_Date,3) = "Fri"
+   v_Sat = v_Sat + 1 IF CDOW(Tally_Date,3) = "Sat"
+
+   v_CDOW = CDOW(Tally_Date,3)
+   v_NDOW = v_Sun IF V_CDOW = "Sun"
+   v_NDOW = v_Mon IF V_CDOW = "Mon"
+   v_NDOW = v_Tue IF V_CDOW = "Tue"
+   v_NDOW = v_Wed IF V_CDOW = "Wed"
+   v_NDOW = v_Thu IF V_CDOW = "Thu"
+   v_NDOW = v_Fri IF V_CDOW = "Fri"
+   v_NDOW = v_Sat IF V_CDOW = "Sat"
+
+   NZST_TimeChange = CTODT(" ")
+   NZST_DST_Active = T IF Tally_Date = NZST_DST_Start.Tally_Date
+   v_NZST_Local_Offset = ALLTRIM(NZST_DST_Start.Local_Offset) IF Tally_Date = NZST_DST_Start.Tally_Date
+   NZST_TimeChange = CTODT(DATETIME(NZST_DST_Start.Local_Time,"YYYYMMDDThhmmss"),"YYYYMMDDThhmmss") IF Tally_Date = NZST_DST_Start.Tally_Date
+   NZST_DST_Active = F IF Tally_Date = NZST_DST_End.Tally_Date
+   NZST_TimeChange = CTODT(DATETIME(NZST_DST_End.Local_Time,"YYYYMMDDThhmmss"),"YYYYMMDDThhmmss") IF Tally_Date = NZST_DST_End.Tally_Date
+   v_NZST_Local_Offset = ALLTRIM(NZST_DST_End.Local_Offset) IF Tally_Date = NZST_DST_End.Tally_Date
+   EXTRACT FIELDS ALL v_CDOW AS "DOW" v_NDOW AS "NDOW" SUB(v_NZST_Local_Offset,1,6) AS "Offset" "NZST" AS "Timezone" NZST_DST_Active NZST_TimeChange IF NOT NZST_DST_active TO Tmp_TimeZone_NZST_Dates
+   EXTRACT FIELDS ALL v_CDOW AS "DOW" v_NDOW AS "NDOW" SUB(v_NZST_Local_Offset,1,6) AS "Offset" "NZDT" AS "Timezone" NZST_DST_Active NZST_TimeChange IF     NZST_DST_active TO Tmp_TimeZone_NZST_Dates
+   
+   AEST_TimeChange = CTODT(" ")
+   AEST_DST_Active = T IF Tally_Date = AEST_DST_Start.Tally_Date
+   v_AEST_Local_Offset = ALLTRIM(AEST_DST_Start.Local_Offset) IF Tally_Date = AEST_DST_Start.Tally_Date
+   AEST_TimeChange = CTODT(DATETIME(AEST_DST_Start.Local_Time,"YYYYMMDDThhmmss"),"YYYYMMDDThhmmss") IF Tally_Date = AEST_DST_Start.Tally_Date
+   AEST_DST_Active = F IF Tally_Date = AEST_DST_End.Tally_Date
+   v_AEST_Local_Offset = ALLTRIM(AEST_DST_End.Local_Offset) IF Tally_Date = AEST_DST_End.Tally_Date
+   AEST_TimeChange = CTODT(DATETIME(AEST_DST_End.Local_Time,"YYYYMMDDThhmmss"),"YYYYMMDDThhmmss") IF Tally_Date = AEST_DST_End.Tally_Date
+   EXTRACT FIELDS ALL v_CDOW AS "DOW" v_NDOW AS "NDOW"  SUB(v_AEST_Local_Offset,1,6) AS "Offset" "AEST" AS "Timezone" AEST_DST_Active AEST_TimeChange IF NOT AEST_DST_active TO Tmp_TimeZone_AEST_Dates
+   EXTRACT FIELDS ALL v_CDOW AS "DOW" v_NDOW AS "NDOW"  SUB(v_AEST_Local_Offset,1,6) AS "Offset" "AEDT" AS "Timezone" AEST_DST_Active AEST_TimeChange IF     AEST_DST_active TO Tmp_TimeZone_AEST_Dates
+END
+
+OPEN Tmp_TimeZone_NZST_Dates
+INDEX ON Tally_Date TO inx_NZST
+
+DEFINE FIELD Serial_easting COMPUTED 
+AS 'Positive or negative'
+1  IF FIND('+',Offset) 
+-1 IF FIND('-',Offset)
+0
+
+DEFINE FIELD Serial_offset COMPUTED Serial_Easting*1.00000000/24*(HOUR(CTOT(INCLUDE(Offset,'0123456789:')))+(MINUTE(CTOT(INCLUDE(Offset,'0123456789:')))/60.00000000))
+   
