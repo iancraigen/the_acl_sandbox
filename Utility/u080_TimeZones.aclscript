@@ -5,6 +5,7 @@ COMMENT
 COMMENT *** Code review requested
 *** need to check if the folder of fld_Data is actually defined.
 *** need to use DISPLAY VERSION to check if unicode or ascii, then we can use the variable to run different IMPORT DELEIMITED statements
+*** should check to see how SET UTCZONE ON|OFF affects things
 
 SET FOLDER /Tmp
 CLOSE PRIMARY
