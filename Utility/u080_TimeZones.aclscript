@@ -1,7 +1,10 @@
 COMMENT Build a tally table of dates and then use this to determine Timezone corrections with Daylight Savings Time
 COMMENT Could use the timezoneDb to determine the Start & end dates
 
+COMMENT
 COMMENT *** Code review requested
+*** need to check if the folder of fld_Data is actually defined.
+*** need to use DISPLAY VERSION to check if unicode or ascii, then we can use the variable to run different IMPORT DELEIMITED statements
 
 SET FOLDER /Tmp
 CLOSE PRIMARY
@@ -16,7 +19,7 @@ v_num_max = v_dateend - v_datestart
 SET LOOP TO 0
 GROUP WHILE RECNO() = 1
 LOOP while v_num <= %v_num_max%
-   EXTRACT v_num AS "Tally" CTOD(DATE(v_datestart+v_num,'YYYYMMDD'),'YYYYMMDD') AS "Tally_Date" TO Tmp_Tally_Dates 
+   EXTRACT v_num AS "Tally" STOD(v_datestart-`19000101`+v_num) AS "Tally_Date" TO Tmp_Tally_Dates 
    v_num = v_num + 1
 END
 END
